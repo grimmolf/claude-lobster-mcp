@@ -56,17 +56,28 @@ npm run build
 
 ### Register with Claude Code
 
-Add to your Claude Code MCP config (`~/.claude/settings.json` or project-level):
+Use `claude mcp add` to register the server. All options must come before the server name, and `--` separates the name from the command.
 
-```json
-{
-  "mcpServers": {
-    "claude-lobster": {
-      "command": "node",
-      "args": ["/path/to/claude-lobster-mcp/dist/index.js"]
-    }
-  }
-}
+```bash
+# Add for the current project only (default local scope)
+claude mcp add --transport stdio claude-lobster -- node /path/to/claude-lobster-mcp/dist/index.js
+
+# Add for all your projects (user scope)
+claude mcp add --transport stdio --scope user claude-lobster -- node /path/to/claude-lobster-mcp/dist/index.js
+```
+
+Verify it was added:
+
+```bash
+claude mcp get claude-lobster
+```
+
+Within a Claude Code session, check status with `/mcp`.
+
+To remove:
+
+```bash
+claude mcp remove claude-lobster
 ```
 
 ### Write a Workflow
