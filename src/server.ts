@@ -1,7 +1,12 @@
+import { readdir, stat } from "node:fs/promises";
+import { join, isAbsolute, extname, basename } from "node:path";
+import { homedir } from "node:os";
 import type { ParsedWorkflow, WorkflowState, TranslatedInstruction } from "./types.js";
 import { loadWorkflow } from "./parser.js";
 import { detectExecutionMode, downgradeToAgent } from "./detector.js";
 import { createWorkflowState, getCurrentStep, completeStep, approveStep, getStatus } from "./tracker.js";
+
+const WORKFLOW_DIR = join(homedir(), ".config", "pai", "workflows");
 
 let workflow: ParsedWorkflow | null = null;
 let state: WorkflowState | null = null;
@@ -9,17 +14,30 @@ let state: WorkflowState | null = null;
 export function getToolDefinitions() {
   return [
     {
+      name: "workflow_list",
+      description:
+        "List available workflow files from ~/.config/pai/workflows/. " +
+        "Returns names and descriptions of all .lobster and .yaml workflow files.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {},
+      },
+    },
+    {
       name: "workflow_load",
       description:
         "Load a Lobster workflow file and initialize the workflow engine. " +
-        "Returns the detected execution mode (Teams or Agent fallback), " +
+        "Accepts a workflow name (resolved from ~/.config/pai/workflows/) " +
+        "or an absolute path. Returns the detected execution mode, " +
         "workflow overview, and the first step instruction.",
       inputSchema: {
         type: "object" as const,
         properties: {
-          path: {
+          name: {
             type: "string",
-            description: "Absolute path to the .lobster workflow file",
+            description:
+              "Workflow name (e.g., 'teams-advisor') resolved from ~/.config/pai/workflows/, " +
+              "or an absolute path to a .lobster file",
           },
           args: {
             type: "object",
@@ -27,7 +45,7 @@ export function getToolDefinitions() {
             additionalProperties: true,
           },
         },
-        required: ["path"],
+        required: ["name"],
       },
     },
     {
@@ -99,6 +117,8 @@ export async function handleToolCall(
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
   try {
     switch (name) {
+      case "workflow_list":
+        return await handleList();
       case "workflow_load":
         return await handleLoad(args);
       case "workflow_current":
@@ -118,12 +138,55 @@ export async function handleToolCall(
   }
 }
 
-async function handleLoad(args: Record<string, unknown>) {
-  const filePath = args.path as string;
-  if (!filePath) {
-    throw new Error("path is required");
+async function handleList() {
+  const workflows: Array<{ name: string; path: string; description?: string }> = [];
+
+  try {
+    const entries = await readdir(WORKFLOW_DIR);
+    for (const entry of entries) {
+      if (!entry.endsWith(".lobster") && !entry.endsWith(".yaml") && !entry.endsWith(".yml")) {
+        continue;
+      }
+      const fullPath = join(WORKFLOW_DIR, entry);
+      const info = await stat(fullPath);
+      if (!info.isFile()) continue;
+
+      try {
+        const wf = await loadWorkflow(fullPath);
+        workflows.push({
+          name: basename(entry, extname(entry)),
+          path: fullPath,
+          description: wf.description,
+        });
+      } catch {
+        workflows.push({
+          name: basename(entry, extname(entry)),
+          path: fullPath,
+          description: "(failed to parse)",
+        });
+      }
+    }
+  } catch {
+    return textResponse(JSON.stringify({
+      workflowDir: WORKFLOW_DIR,
+      workflows: [],
+      message: `No workflows found. Place .lobster files in ${WORKFLOW_DIR}`,
+    }, null, 2));
   }
 
+  return textResponse(JSON.stringify({
+    workflowDir: WORKFLOW_DIR,
+    workflows,
+  }, null, 2));
+}
+
+async function handleLoad(args: Record<string, unknown>) {
+  const nameOrPath = (args.name ?? args.path) as string;
+  if (!nameOrPath) {
+    throw new Error("name is required — provide a workflow name or absolute path");
+  }
+
+  const filePath = await resolveWorkflowPath(nameOrPath);
   workflow = await loadWorkflow(filePath);
   const detection = detectExecutionMode();
   const workflowArgs = (args.args as Record<string, unknown>) ?? {};
@@ -261,4 +324,30 @@ export function downgradeMode() {
   const detection = detectExecutionMode();
   const downgraded = downgradeToAgent(detection);
   state.mode = downgraded.mode;
+}
+
+async function resolveWorkflowPath(nameOrPath: string): Promise<string> {
+  if (isAbsolute(nameOrPath)) return nameOrPath;
+
+  const candidates = [
+    join(WORKFLOW_DIR, nameOrPath),
+    join(WORKFLOW_DIR, `${nameOrPath}.lobster`),
+    join(WORKFLOW_DIR, `${nameOrPath}.yaml`),
+    join(WORKFLOW_DIR, `${nameOrPath}.yml`),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      const info = await stat(candidate);
+      if (info.isFile()) return candidate;
+    } catch {
+      continue;
+    }
+  }
+
+  throw new Error(
+    `Workflow "${nameOrPath}" not found. Searched:\n` +
+    candidates.map((c) => `  - ${c}`).join("\n") +
+    `\n\nUse workflow_list to see available workflows.`,
+  );
 }

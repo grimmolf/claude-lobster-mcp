@@ -5,10 +5,11 @@ import { join } from "node:path";
 const WORKFLOW_PATH = join(import.meta.dirname, "..", "workflows", "teams-advisor.lobster");
 
 describe("MCP tool integration", () => {
-  it("lists all 5 tools", () => {
+  it("lists all 6 tools", () => {
     const tools = getToolDefinitions();
-    expect(tools).toHaveLength(5);
+    expect(tools).toHaveLength(6);
     const names = tools.map((t) => t.name);
+    expect(names).toContain("workflow_list");
     expect(names).toContain("workflow_load");
     expect(names).toContain("workflow_current");
     expect(names).toContain("workflow_complete");

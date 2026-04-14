@@ -82,6 +82,16 @@ claude mcp remove claude-lobster
 
 ### Write a Workflow
 
+Workflow files live in `~/.config/pai/workflows/`. The agent can discover them with `workflow_list` and load them by name.
+
+```bash
+# Create the directory
+mkdir -p ~/.config/pai/workflows
+
+# Copy the included advisor workflow
+cp workflows/teams-advisor.lobster ~/.config/pai/workflows/
+```
+
 Create a `.lobster` file using standard Lobster YAML:
 
 ```yaml
@@ -109,8 +119,8 @@ steps:
 The lead agent's system prompt shrinks to:
 
 ```
-You have a workflow tool (claude-lobster-mcp). At the start of every
-session, call workflow_load with the workflow file path provided.
+You have a workflow tool (claude-lobster-mcp). Call workflow_list to see
+available workflows, then workflow_load with the workflow name to begin.
 
 The workflow returns steps one at a time. Each step tells you exactly
 what to do — which tool to call, with what args. Follow the instruction,
@@ -124,11 +134,17 @@ The workflow controls the sequence. Do not skip or reorder steps.
 
 ## MCP Tools
 
+### `workflow_list`
+
+List available workflows from `~/.config/pai/workflows/`.
+
+**Returns**: Array of workflow names, paths, and descriptions.
+
 ### `workflow_load`
 
 Load and initialize a workflow.
 
-**Input**: `{ path: string, args?: object }`
+**Input**: `{ name: string, args?: object }` — name can be a workflow name (e.g., `teams-advisor`) or an absolute path.
 **Returns**: Detected mode, workflow overview, first step instruction.
 
 ### `workflow_current`
