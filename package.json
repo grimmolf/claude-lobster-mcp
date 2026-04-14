@@ -1,0 +1,35 @@
+{
+  "name": "claude-lobster-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that translates Lobster workflow files into Claude Code Agent Teams commands",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "claude-lobster-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "start": "node dist/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@clawdbot/lobster": "^2026.4.6",
+    "yaml": "^2.7.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.2"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/grimmolf/claude-lobster-mcp.git"
+  }
+}
