@@ -79,9 +79,8 @@ describe("MCP tool integration", () => {
     });
     const afterExecute = JSON.parse(completeExecute.content[0].text);
     expect(afterExecute.nextStep.stepId).toBe("consult_review");
-    // In agent fallback mode (no TMUX), this is an instruction with Agent tool.
-    // In teams mode, it would be message_teammate.
-    expect(afterExecute.nextStep.actionType).toBe("instruction");
+    // Teams mode: message_teammate (advisor already spawned). Agent fallback: instruction.
+    expect(afterExecute.nextStep.actionType).toMatch(/message_teammate|instruction/);
 
     // Complete consult_review (has approval gate)
     await handleToolCall("workflow_complete", {
