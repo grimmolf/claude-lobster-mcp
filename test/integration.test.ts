@@ -17,9 +17,9 @@ const TEAMS_ENV: Record<string, string | undefined> = {
 };
 
 describe("MCP tool integration", () => {
-  it("lists all 6 tools", () => {
+  it("lists all 7 tools", () => {
     const tools = getToolDefinitions();
-    expect(tools).toHaveLength(6);
+    expect(tools).toHaveLength(7);
     const names = tools.map((t) => t.name);
     expect(names).toContain("workflow_list");
     expect(names).toContain("workflow_load");
@@ -27,6 +27,7 @@ describe("MCP tool integration", () => {
     expect(names).toContain("workflow_complete");
     expect(names).toContain("workflow_approve");
     expect(names).toContain("workflow_status");
+    expect(names).toContain("workflow_scrape_advisor");
   });
 
   it("returns error when no workflow loaded", async () => {

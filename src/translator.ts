@@ -22,13 +22,14 @@ export function translateStep(
   args: Record<string, unknown>,
   results: Record<string, WorkflowStepResult>,
   teammates: Map<string, string>,
+  advisorPaneId?: string,
 ): TranslatedInstruction {
   if (step.parallel) {
     return translateParallel(step, mode, args, results, teammates);
   }
 
   if (step.pipeline) {
-    return translatePipeline(step, mode, args, results, teammates);
+    return translatePipeline(step, mode, args, results, teammates, advisorPaneId);
   }
 
   const shellCmd = step.run ?? step.command;
@@ -54,6 +55,7 @@ function translatePipeline(
   args: Record<string, unknown>,
   results: Record<string, WorkflowStepResult>,
   teammates: Map<string, string>,
+  advisorPaneId?: string,
 ): TranslatedInstruction {
   const pipelineStr = resolveArgsTemplate(step.pipeline!, args);
   const cmd = parsePipelineCommand(pipelineStr);
@@ -67,7 +69,7 @@ function translatePipeline(
     const isAdvisor = model !== undefined && isHighCapabilityModel(model);
 
     if (isAdvisor) {
-      return translateAdvisorCall(step.id, mode, model, prompt, resolvedStdin, hasApproval, approvalMsg, teammates);
+      return translateAdvisorCall(step.id, mode, model, prompt, resolvedStdin, hasApproval, approvalMsg, teammates, advisorPaneId);
     }
 
     return {
@@ -103,6 +105,7 @@ function translateAdvisorCall(
   hasApproval: boolean,
   approvalMsg: string | undefined,
   teammates: Map<string, string>,
+  advisorPaneId?: string,
 ): TranslatedInstruction {
   const teammateName = `advisor-${model}`;
   const existingTeammate = teammates.get(model);
@@ -112,7 +115,7 @@ function translateAdvisorCall(
       return {
         stepId,
         actionType: "message_teammate",
-        description: `Consult the ${model} advisor (already spawned as "${existingTeammate}"). Send context and await response.`,
+        description: `Consult the ${model} advisor (already spawned as "${existingTeammate}"). Send context and await response. If no reply arrives, call workflow_scrape_advisor to read the pane directly.`,
         toolToCall: "message",
         toolArgs: {
           teammate: existingTeammate,
@@ -122,6 +125,7 @@ function translateAdvisorCall(
         stdin,
         hasApproval,
         approvalMessage: approvalMsg,
+        advisorPane: advisorPaneId,
       };
     }
 

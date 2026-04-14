@@ -48,7 +48,7 @@ export function getCurrentStep(
 
   if (entry.state === "completed" || entry.state === "skipped") return null;
 
-  return translateStep(step, state.mode, state.args, state.results, state.teammates);
+  return translateStep(step, state.mode, state.args, state.results, state.teammates, state.advisorPaneId);
 }
 
 export function completeStep(
@@ -181,6 +181,7 @@ function advanceToNext(
       state.args,
       state.results,
       state.teammates,
+      state.advisorPaneId,
     );
     return { nextInstruction: instruction, workflowComplete: false };
   }

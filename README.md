@@ -173,6 +173,16 @@ Get full workflow status.
 
 **Returns**: All steps with states, current position, completion percentage.
 
+### `workflow_scrape_advisor`
+
+Fallback for Teams mode advisor response delivery (see [issue #1](https://github.com/grimmolf/claude-lobster-mcp/issues/1)). When a `message_teammate` step sends a message to the advisor but no reply arrives as a notification, this tool reads the advisor's tmux pane directly and returns the latest response text.
+
+**Input**: `{ team_name?: string }` — looks up the advisor pane from `~/.claude/teams/<team>/config.json`. If omitted, uses the pane ID captured during `workflow_complete` of the preceding `spawn_teammate` step.
+
+**Returns**: `{ paneId, response, scrapedAt, raw }` — `response` is the cleaned latest advisor reply; `raw` is the last 2KB of pane buffer for debugging.
+
+**When to use it**: The lead waits a reasonable window (e.g., 10-30s) after sending to the advisor teammate. If no teammate-message notification arrives, call this tool to retrieve the reply directly.
+
 ## Workflow File Reference
 
 Workflow files use standard Lobster YAML. Supported constructs:

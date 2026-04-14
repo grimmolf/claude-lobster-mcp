@@ -1,6 +1,10 @@
-import { readdir, stat } from "node:fs/promises";
+import { readdir, stat, readFile } from "node:fs/promises";
 import { join, isAbsolute, extname, basename } from "node:path";
 import { homedir } from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 import type { ParsedWorkflow, WorkflowState, TranslatedInstruction } from "./types.js";
 import { loadWorkflow } from "./parser.js";
 import { detectExecutionMode, downgradeToAgent } from "./detector.js";
@@ -108,6 +112,26 @@ export function getToolDefinitions() {
         properties: {},
       },
     },
+    {
+      name: "workflow_scrape_advisor",
+      description:
+        "Fallback for Teams mode: when the advisor teammate sends a response but it " +
+        "doesn't arrive as a message notification, read the advisor's tmux pane directly " +
+        "and extract the latest response. Use this when workflow_current returns a " +
+        "message_teammate step and no reply has arrived after a reasonable wait. " +
+        "Returns the advisor's latest response text and the pane it was scraped from.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          team_name: {
+            type: "string",
+            description:
+              "Team name to look up the advisor pane from config. " +
+              "If omitted, uses the pane ID stored in the current workflow state.",
+          },
+        },
+      },
+    },
   ];
 }
 
@@ -125,11 +149,13 @@ export async function handleToolCall(
       case "workflow_current":
         return handleCurrent();
       case "workflow_complete":
-        return handleComplete(args);
+        return await handleComplete(args);
       case "workflow_approve":
         return handleApprove(args);
       case "workflow_status":
         return handleStatus();
+      case "workflow_scrape_advisor":
+        return await handleScrapeAdvisor(args);
       default:
         return textResponse(`Unknown tool: ${name}`);
     }
@@ -225,12 +251,25 @@ function handleCurrent() {
   return textResponse(JSON.stringify(formatInstruction(instruction), null, 2));
 }
 
-function handleComplete(args: Record<string, unknown>) {
+async function handleComplete(args: Record<string, unknown>) {
   assertLoaded();
   const stepId = args.step_id as string;
   if (!stepId) throw new Error("step_id is required");
 
+  // If completing a spawn_teammate step, try to capture the advisor pane ID from the team config.
+  const currentInstruction = getCurrentStep(state!, workflow!);
+  const isSpawnStep = currentInstruction?.actionType === "spawn_teammate";
+
   const result = completeStep(state!, workflow!, stepId, args.output);
+
+  // After a successful spawn, look up the new advisor's pane ID in the team config.
+  if (isSpawnStep && state!.mode === "teams" && !state!.advisorPaneId) {
+    const teamName = process.env.CLAUDE_CODE_TEAM_NAME ?? inferTeamName();
+    if (teamName) {
+      const paneId = await lookupAdvisorPane(teamName);
+      if (paneId) state!.advisorPaneId = paneId;
+    }
+  }
 
   if (result.workflowComplete) {
     return textResponse(JSON.stringify({
@@ -280,6 +319,114 @@ function handleStatus() {
   return textResponse(JSON.stringify(getStatus(state!), null, 2));
 }
 
+async function handleScrapeAdvisor(args: Record<string, unknown>) {
+  const explicitTeamName = typeof args.team_name === "string" ? args.team_name : undefined;
+
+  let paneId: string | undefined = state?.advisorPaneId;
+
+  if (!paneId) {
+    const teamName = explicitTeamName ?? process.env.CLAUDE_CODE_TEAM_NAME ?? inferTeamName();
+    if (!teamName) {
+      throw new Error(
+        "No team name available. Pass team_name, set CLAUDE_CODE_TEAM_NAME, " +
+        "or load a workflow first (spawn_teammate completion captures the pane automatically).",
+      );
+    }
+    paneId = await lookupAdvisorPane(teamName);
+    if (!paneId) {
+      throw new Error(
+        `Could not find advisor pane in team "${teamName}". ` +
+        `Ensure an advisor teammate has been spawned and the config is readable.`,
+      );
+    }
+    // Remember it if a workflow is loaded.
+    if (state) state.advisorPaneId = paneId;
+  }
+
+  const paneText = await capturePane(paneId);
+  const response = extractLatestAdvisorResponse(paneText);
+
+  return textResponse(JSON.stringify({
+    paneId,
+    response,
+    scrapedAt: new Date().toISOString(),
+    raw: paneText.slice(-2000),
+  }, null, 2));
+}
+
+async function lookupAdvisorPane(teamName: string): Promise<string | undefined> {
+  const configPath = join(homedir(), ".claude", "teams", teamName, "config.json");
+  try {
+    const contents = await readFile(configPath, "utf8");
+    const config = JSON.parse(contents) as { members?: Array<{ name?: string; tmuxPaneId?: string }> };
+    const advisor = config.members?.find((m) => m.name === "advisor" && m.tmuxPaneId);
+    return advisor?.tmuxPaneId;
+  } catch {
+    return undefined;
+  }
+}
+
+function inferTeamName(): string | undefined {
+  // No reliable cross-process signal exists; callers should pass team_name or set the env var.
+  // Left as a seam for future enhancement (e.g., a `.current-team` marker file).
+  return undefined;
+}
+
+async function capturePane(paneId: string): Promise<string> {
+  const { stdout } = await execFileAsync("tmux", [
+    "capture-pane",
+    "-p",
+    "-t",
+    paneId,
+    "-S",
+    "-500",
+  ]);
+  return stdout;
+}
+
+/**
+ * Extract the advisor's latest response from tmux pane text.
+ * Looks for the last `@team-lead❯` prompt (the message *from* the lead) and
+ * returns the text that follows it, up to the next prompt or end of buffer.
+ * The advisor's reply appears between `⏺` markers and the next prompt line.
+ */
+export function extractLatestAdvisorResponse(paneText: string): string {
+  const lines = paneText.split("\n");
+
+  // Find the last index where a line contains the lead's prompt indicator.
+  let lastLeadPromptIdx = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/@team-lead[❯>]/.test(lines[i])) {
+      lastLeadPromptIdx = i;
+      break;
+    }
+  }
+
+  if (lastLeadPromptIdx === -1) {
+    return paneText.trim();
+  }
+
+  // Collect lines after the last lead prompt, stop when we hit a new prompt line,
+  // a pane divider (pure horizontal rule or one containing @team-lead/@advisor),
+  // or a bare terminal prompt (`❯` possibly followed by trailing whitespace/NBSP).
+  const responseLines: string[] = [];
+  for (let i = lastLeadPromptIdx + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (/@(team-lead|advisor)[❯>]/.test(line)) break;
+    if (/^─{5,}/.test(line)) break;
+    if (/^[\s\u00a0]*❯[\s\u00a0]*$/.test(line)) break;
+    responseLines.push(line);
+  }
+
+  // Strip the leading `⏺` marker that Claude Code prepends to assistant output.
+  const cleaned = responseLines
+    .join("\n")
+    .replace(/^\s*⏺\s*/, "")
+    .trim();
+
+  return cleaned || paneText.trim();
+}
+
 function assertLoaded() {
   if (!workflow || !state) {
     throw new Error("No workflow loaded. Call workflow_load first.");
@@ -297,6 +444,11 @@ function formatInstruction(instr: TranslatedInstruction): Record<string, unknown
   if (instr.toolArgs) result.toolArgs = instr.toolArgs;
   if (instr.prompt) result.prompt = instr.prompt;
   if (instr.stdin !== null && instr.stdin !== undefined) result.context = instr.stdin;
+  if (instr.advisorPane) {
+    result.advisorPane = instr.advisorPane;
+    result.scrapeFallback =
+      "If the advisor's reply doesn't arrive as a notification, call workflow_scrape_advisor.";
+  }
   if (instr.hasApproval) {
     result.requiresApproval = true;
     if (instr.approvalMessage) result.approvalMessage = instr.approvalMessage;

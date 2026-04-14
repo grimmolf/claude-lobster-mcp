@@ -43,6 +43,8 @@ export interface TranslatedInstruction {
   hasApproval: boolean;
   approvalMessage?: string;
   branches?: TranslatedBranch[];
+  /** Tmux pane target for the advisor (set on message_teammate steps). Use workflow_scrape_advisor if no response arrives. */
+  advisorPane?: string;
 }
 
 export interface TranslatedBranch {
@@ -70,6 +72,8 @@ export interface WorkflowState {
   results: Record<string, WorkflowStepResult>;
   args: Record<string, unknown>;
   teammates: Map<string, string>;
+  /** Tmux pane ID of the spawned advisor (populated after spawn_teammate completes). */
+  advisorPaneId?: string;
 }
 
 export interface ParsedPipelineCommand {
