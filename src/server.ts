@@ -114,13 +114,14 @@ export function getToolDefinitions() {
 export async function handleToolCall(
   name: string,
   args: Record<string, unknown>,
+  _env?: Record<string, string | undefined>,
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
   try {
     switch (name) {
       case "workflow_list":
         return await handleList();
       case "workflow_load":
-        return await handleLoad(args);
+        return await handleLoad(args, _env);
       case "workflow_current":
         return handleCurrent();
       case "workflow_complete":
@@ -180,7 +181,7 @@ async function handleList() {
   }, null, 2));
 }
 
-async function handleLoad(args: Record<string, unknown>) {
+async function handleLoad(args: Record<string, unknown>, env?: Record<string, string | undefined>) {
   const nameOrPath = (args.name ?? args.path) as string;
   if (!nameOrPath) {
     throw new Error("name is required — provide a workflow name or absolute path");
@@ -188,7 +189,7 @@ async function handleLoad(args: Record<string, unknown>) {
 
   const filePath = await resolveWorkflowPath(nameOrPath);
   workflow = await loadWorkflow(filePath);
-  const detection = detectExecutionMode();
+  const detection = detectExecutionMode(env);
   const workflowArgs = (args.args as Record<string, unknown>) ?? {};
 
   state = createWorkflowState(workflow, detection.mode, workflowArgs);

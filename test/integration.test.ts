@@ -4,6 +4,18 @@ import { join } from "node:path";
 
 const WORKFLOW_PATH = join(import.meta.dirname, "..", "workflows", "teams-advisor.lobster");
 
+// Force agent-fallback mode for deterministic test behavior regardless of host env.
+const AGENT_ENV: Record<string, string | undefined> = {
+  CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: undefined,
+  TMUX: undefined,
+};
+
+// Force teams mode for teams-specific assertions.
+const TEAMS_ENV: Record<string, string | undefined> = {
+  CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1",
+  TMUX: "/tmp/tmux-test/default,0,0",
+};
+
 describe("MCP tool integration", () => {
   it("lists all 6 tools", () => {
     const tools = getToolDefinitions();
@@ -22,12 +34,12 @@ describe("MCP tool integration", () => {
     expect(result.content[0].text).toContain("No workflow loaded");
   });
 
-  it("runs the full advisor workflow lifecycle", async () => {
-    // Load
+  it("runs the full advisor workflow lifecycle (agent fallback mode)", async () => {
+    // Load — inject agent env so detection is hermetic regardless of host tmux/env state
     const loadResult = await handleToolCall("workflow_load", {
       path: WORKFLOW_PATH,
       args: { task: "Fix the authentication bug in the login module" },
-    });
+    }, AGENT_ENV);
     const loaded = JSON.parse(loadResult.content[0].text);
     expect(loaded.loaded).toBe(true);
     expect(loaded.workflow.name).toBe("teams-advisor-session");
@@ -79,8 +91,8 @@ describe("MCP tool integration", () => {
     });
     const afterExecute = JSON.parse(completeExecute.content[0].text);
     expect(afterExecute.nextStep.stepId).toBe("consult_review");
-    // Teams mode: message_teammate (advisor already spawned). Agent fallback: instruction.
-    expect(afterExecute.nextStep.actionType).toMatch(/message_teammate|instruction/);
+    // Agent fallback: consult_review is an instruction (no persistent teammate).
+    expect(afterExecute.nextStep.actionType).toBe("instruction");
 
     // Complete consult_review (has approval gate)
     await handleToolCall("workflow_complete", {
@@ -114,10 +126,50 @@ describe("MCP tool integration", () => {
     await handleToolCall("workflow_load", {
       path: WORKFLOW_PATH,
       args: { task: "Test error handling" },
-    });
+    }, AGENT_ENV);
     const result = await handleToolCall("workflow_complete", {
       step_id: "nonexistent",
     });
     expect(result.content[0].text).toContain("Error");
+  });
+
+  it("detects teams mode and emits spawn_teammate then message_teammate for advisor steps", async () => {
+    const loadResult = await handleToolCall("workflow_load", {
+      path: WORKFLOW_PATH,
+      args: { task: "Teams mode detection test" },
+    }, TEAMS_ENV);
+    const loaded = JSON.parse(loadResult.content[0].text);
+    expect(loaded.detection.mode).toBe("teams");
+
+    // orient is always instruction regardless of mode
+    expect(loaded.firstStep.actionType).toBe("instruction");
+
+    // Complete orient — consult_approach should be spawn_teammate (first Opus call)
+    const afterOrient = JSON.parse((await handleToolCall("workflow_complete", {
+      step_id: "orient",
+      output: { findings: "test" },
+    })).content[0].text);
+    expect(afterOrient.nextStep.actionType).toBe("spawn_teammate");
+    expect(afterOrient.nextStep.toolArgs.model).toBe("opus");
+
+    // Complete consult_approach (has approval gate)
+    await handleToolCall("workflow_complete", {
+      step_id: "consult_approach",
+      output: { advice: "test advice" },
+    });
+    await handleToolCall("workflow_approve", {
+      step_id: "consult_approach",
+    });
+
+    // Skip through plan_execution and execute
+    await handleToolCall("workflow_complete", { step_id: "plan_execution", output: {} });
+
+    // After execute, consult_review should be message_teammate (advisor already spawned)
+    const afterExecute = JSON.parse((await handleToolCall("workflow_complete", {
+      step_id: "execute",
+      output: {},
+    })).content[0].text);
+    expect(afterExecute.nextStep.stepId).toBe("consult_review");
+    expect(afterExecute.nextStep.actionType).toBe("message_teammate");
   });
 });
